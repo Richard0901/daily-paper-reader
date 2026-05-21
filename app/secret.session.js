@@ -245,6 +245,7 @@
       provider: 'public_zwwen',
       model: 'Qwen/Qwen3-Reranker-0.6B',
       baseUrl: 'https://zwwen.online/rerank',
+      requiresApiKey: false,
       note: '默认推荐；使用 zwwen.online 公益 rerank 服务。',
     },
     {
@@ -253,6 +254,7 @@
       provider: 'local',
       model: 'Qwen/Qwen3-Reranker-0.6B',
       baseUrl: '',
+      requiresApiKey: false,
       note: '无需 reranker API Key，GitHub Actions 在 CPU 上加载本地模型。',
     },
     {
@@ -261,6 +263,7 @@
       provider: 'siliconflow',
       model: 'Qwen/Qwen3-Reranker-0.6B',
       baseUrl: 'https://api.siliconflow.cn/v1/rerank',
+      requiresApiKey: true,
       note: '速度快、成本低；需要硅基流动 API Key。',
     },
   ];
@@ -1266,14 +1269,32 @@
       const selectedRerankerProfile = () => {
         return findRerankerProfile(rerankerProfileSelect.value);
       };
+      const rerankerRequiresApiKey = (profile) => {
+        return profile.provider !== 'local' && profile.requiresApiKey !== false;
+      };
       const syncRerankerFields = () => {
         const profile = selectedRerankerProfile();
         const isRemote = profile.provider !== 'local';
+        const requiresApiKey = rerankerRequiresApiKey(profile);
         const previousProfile = findRerankerProfile(
           rerankerBaseUrlInput.getAttribute('data-reranker-profile') || '',
         );
         const currentBaseUrl = normalizeText(rerankerBaseUrlInput.value || '');
         rerankerRemoteFields.style.display = isRemote ? 'block' : 'none';
+        if (isRemote) {
+          rerankerApiKeyInput.closest('.secret-setup-input-row').style.display = requiresApiKey ? 'block' : 'none';
+          rerankerApiKeyInput.disabled = !requiresApiKey;
+          rerankerApiKeyInput.placeholder = requiresApiKey
+            ? 'Reranker API Key'
+            : '公益 Reranker 无需 API Key';
+          if (!requiresApiKey) {
+            rerankerApiKeyInput.value = '';
+          }
+        } else {
+          rerankerApiKeyInput.closest('.secret-setup-input-row').style.display = 'none';
+          rerankerApiKeyInput.disabled = true;
+          rerankerApiKeyInput.value = '';
+        }
         if (
           isRemote &&
           (!currentBaseUrl || currentBaseUrl === previousProfile.baseUrl)
@@ -1308,7 +1329,10 @@
         customStatusEl.style.color = '#999';
       };
       const resetRerankerTestStatus = () => {
-        rerankerTestStatusEl.textContent = '将发送一次最小 rerank 请求验证 API Key、Base URL 与模型是否可用。';
+        const profile = selectedRerankerProfile();
+        rerankerTestStatusEl.textContent = rerankerRequiresApiKey(profile)
+          ? '将发送一次最小 rerank 请求验证 API Key、Base URL 与模型是否可用。'
+          : '将发送一次最小 rerank 请求验证 Base URL 与模型是否可用。';
         rerankerTestStatusEl.style.color = '#999';
       };
       const buildRerankerDraft = (fallbackApiKey, fallbackBaseUrl) => {
@@ -1319,8 +1343,9 @@
         );
         const apiKey = typedApiKey;
         const baseUrl = typedBaseUrl;
+        const requiresApiKey = rerankerRequiresApiKey(profile);
 
-        if (profile.provider !== 'local' && !apiKey) {
+        if (requiresApiKey && !apiKey) {
           throw new Error(`选择 ${profile.label} 时需要填写 Reranker API Key。`);
         }
         if (profile.provider !== 'local' && !baseUrl) {
@@ -1332,7 +1357,7 @@
           type: profile.provider,
           provider: profile.provider,
           model: profile.model,
-          apiKey: profile.provider === 'local' ? '' : apiKey,
+          apiKey: requiresApiKey ? apiKey : '',
           baseUrl: profile.provider === 'local' ? '' : baseUrl,
         };
       };
@@ -1401,6 +1426,7 @@
 
       syncProviderSections();
       syncRerankerFields();
+      resetRerankerTestStatus();
 
       bindResetOnInput([githubInput], resetGithubStatus);
       bindResetOnInput([deepseekInput, deepseekModelSelect], resetDeepSeekStatus);
@@ -1435,12 +1461,15 @@
         rerankerTestStatusEl.textContent = '正在测试远端 Reranker...';
         rerankerTestStatusEl.style.color = '#666';
         try {
+          const headers = {
+            'Content-Type': 'application/json',
+          };
+          if (draft.apiKey) {
+            headers.Authorization = `Bearer ${draft.apiKey}`;
+          }
           const res = await fetch(endpoint, {
             method: 'POST',
-            headers: {
-              Authorization: `Bearer ${draft.apiKey}`,
-              'Content-Type': 'application/json',
-            },
+            headers,
             body: JSON.stringify({
               model: draft.model,
               query: 'Which paper is about neural machine translation?',
